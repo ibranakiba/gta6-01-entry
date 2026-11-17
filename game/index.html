@@ -1,0 +1,190 @@
+<!-- Crown Bay — index.html rewritten in recorded session fix7, 18 Nov 2026. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crown Bay — an open-world crime game</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a1226; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .hud { position: fixed; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); z-index: 5; user-select: none; pointer-events: none; }
+  #hud-cash { top: 14px; left: 16px; font-size: 26px; font-weight: 800; color: #7dff9a; }
+  #hud-health { top: 48px; left: 16px; width: 210px; }
+  #hud-health-bar { height: 12px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.5); border-radius: 6px; overflow: hidden; }
+  #hud-health-fill { height: 100%; width: 100%; background: #3a8a5f; }
+  #hud-health-text { font-size: 12px; margin-top: 2px; }
+  #hud-stars { top: 14px; right: 16px; font-size: 26px; letter-spacing: 3px; text-align: right; }
+  #hud-clock { top: 48px; right: 16px; font-size: 16px; text-align: right; }
+  #hud-weather { top: 72px; right: 16px; font-size: 14px; text-align: right; color: #cfe0f0; }
+  #hud-mission { top: 14px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 44vw; }
+  #hud-mission-title { font-size: 17px; font-weight: 800; color: #ffd23c; }
+  #hud-mission-text { font-size: 14px; color: #eef1f5; }
+  #hud-speed { bottom: 18px; right: 22px; font-size: 34px; font-weight: 800; text-align: right; }
+  #hud-speed-unit { font-size: 14px; font-weight: 400; }
+  #hud-message { bottom: 110px; left: 50%; transform: translateX(-50%); font-size: 18px; font-weight: 700; color: #ffd23c; text-align: center; transition: opacity .4s; white-space: nowrap; }
+  #hud-prompt { bottom: 84px; left: 50%; transform: translateX(-50%); font-size: 15px; color: #fff; text-align: center; }
+  #minimap-wrap { position: fixed; bottom: 16px; left: 16px; z-index: 5; border: 2px solid rgba(255,255,255,.65); border-radius: 50%; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.5); }
+  #minimap { display: block; width: 220px; height: 220px; background: transparent; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; z-index: 5; pointer-events: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: rgba(255,255,255,.9); box-shadow: 0 0 3px #000; }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { top: 8px; left: 0; width: 18px; height: 2px; }
+  #vignette { position: fixed; inset: 0; z-index: 4; pointer-events: none; opacity: 0; transition: opacity .5s;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(200,10,20,.55) 100%); }
+  .screen { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; color: #fff; background: linear-gradient(180deg, rgba(6,10,24,.55) 0%, rgba(6,10,24,.82) 100%); }
+  .screen h1 { font-size: 72px; margin: 0; letter-spacing: 6px; font-weight: 900; color: #ffd23c;
+    text-shadow: 0 0 24px rgba(255,210,60,.55), 0 4px 0 #7a2a00; }
+  .screen h2 { font-size: 20px; margin: 6px 0 18px; font-weight: 600; color: #cfe0f0; letter-spacing: 2px; }
+  .screen .story { max-width: 620px; font-size: 16px; line-height: 1.55; color: #eef1f5; margin: 0 20px 14px; }
+  .screen .controls { font-size: 13.5px; line-height: 1.7; color: #b8c8d8; margin-bottom: 20px; }
+  .screen .prompt { font-size: 19px; font-weight: 700; color: #ffd23c; animation: pulse 1.6s infinite; }
+  .screen .meta { font-size: 13px; color: #9ab0c0; margin-top: 14px; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+  #over-title { font-size: 64px; }
+  #over-lines { font-size: 17px; line-height: 1.8; margin-bottom: 18px; }
+  .touch-btn { position: fixed; z-index: 6; width: 64px; height: 64px; border-radius: 50%; background: rgba(255,255,255,.18);
+    border: 2px solid rgba(255,255,255,.5); color: #fff; font-size: 22px; font-weight: 800; display: none; align-items: center; justify-content: center; }
+  @media (pointer: coarse) { .touch-btn { display: flex; } }
+  #btn-enter { right: 20px; bottom: 110px; }
+  #btn-shoot { right: 96px; bottom: 40px; }
+  #btn-horn { right: 20px; bottom: 190px; font-size: 16px; }
+  /* Real clickable START button on the title screen: a visible fallback so
+     starting the game never depends on one input path alone. */
+  #btn-start { display: inline-block; margin-top: 18px; padding: 15px 46px; font-size: 23px; font-weight: 900;
+    letter-spacing: 3px; color: #1a1200; background: #ffd23c; border: 0; border-radius: 10px; cursor: pointer;
+    box-shadow: 0 0 26px rgba(255,210,60,.55), 0 4px 0 #7a2a00; }
+  #btn-start:hover { background: #ffe06a; }
+  #btn-start:active { transform: translateY(2px); box-shadow: 0 0 18px rgba(255,210,60,.55), 0 2px 0 #7a2a00; }
+  #boot-error { display: none; max-width: 620px; margin-top: 16px; padding: 12px 16px; font-size: 15px; line-height: 1.5;
+    color: #ffd7d7; background: rgba(180,20,30,.35); border: 1px solid rgba(255,90,90,.7); border-radius: 8px; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="Crown Bay: an open-world crime game. Walk the city, steal cars, dodge the police, run missions for Marla Voss."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+
+<div id="vignette"></div>
+<div id="crosshair"></div>
+
+<div class="hud" id="hud-cash">$0</div>
+<div class="hud" id="hud-health">
+  <div id="hud-health-bar"><div id="hud-health-fill"></div></div>
+  <div id="hud-health-text">100</div>
+</div>
+<div class="hud" id="hud-stars">☆☆☆☆☆</div>
+<div class="hud" id="hud-clock">10:30 Morning</div>
+<div class="hud" id="hud-weather">☀ Clear</div>
+<div class="hud" id="hud-mission">
+  <div id="hud-mission-title">★ First Wheels</div>
+  <div id="hud-mission-text">Steal a car (walk up to one and press E)</div>
+</div>
+<div class="hud" id="hud-speed"><span id="hud-speed-num"></span> <span id="hud-speed-unit"></span></div>
+<div class="hud" id="hud-message"></div>
+<div class="hud" id="hud-prompt"></div>
+<div id="minimap-wrap"><canvas id="minimap" width="220" height="220"></canvas></div>
+
+<div class="touch-btn" id="btn-enter">E</div>
+<div class="touch-btn" id="btn-shoot">🔫</div>
+<div class="touch-btn" id="btn-horn">📯</div>
+
+<div class="screen" id="screen-title">
+  <h1>CROWN BAY</h1>
+  <h2>AN OPEN-WORLD CRIME STORY</h2>
+  <p class="story">Rook arrives in Crown Bay with nothing but a name and a debt.
+  The fixer Marla Voss has five jobs — cars to steal, a package to run, a night at
+  Club Lumen, a chase the whole CBPD will remember, and one last score at Meridian Bank.
+  Walk the streets, take any car you want, and don't get caught.</p>
+  <div class="controls">
+    W A S D — walk / drive &nbsp;·&nbsp; Mouse — look (click to lock)<br>
+    Shift — run / boost &nbsp;·&nbsp; E — enter / exit vehicle &nbsp;·&nbsp; F / Click — shoot<br>
+    R — reload &nbsp;·&nbsp; H — horn &nbsp;·&nbsp; Space — jump / handbrake &nbsp;·&nbsp; M — big map &nbsp;·&nbsp; P — pause
+  </div>
+  <div class="prompt">PRESS ENTER OR CLICK TO START</div>
+  <button id="btn-start" type="button">▶&nbsp;&nbsp;START</button>
+  <div id="boot-error"></div>
+  <div class="meta" id="title-best"></div>
+  <div class="meta" id="title-save"></div>
+</div>
+
+<div class="screen" id="screen-pause" style="display:none">
+  <h1 style="font-size:52px">PAUSED</h1>
+  <h2>Crown Bay waits for no one — except now.</h2>
+  <div class="prompt">PRESS P TO RESUME</div>
+</div>
+
+<div class="screen" id="screen-over" style="display:none">
+  <h1 id="over-title">WASTED</h1>
+  <div id="over-lines"></div>
+  <div class="prompt" id="over-prompt">Press Enter to try again</div>
+</div>
+
+<script>
+  // Title-screen input: three redundant paths so starting can never silently
+  // fail. (1) The game module's own window pointerdown listener raises
+  // ACTION_CONFIRM for any primary pointer press. (2) The START button and
+  // the title/over overlays call the game's input.confirm() directly when
+  // the game has booted. (3) As a last resort, a synthetic Enter keydown is
+  // dispatched for the module's keydown listener. Enter/Space on the
+  // keyboard go through path (1)'s keydown listener in the module.
+  window.__bootErrors = [];
+  function confirmStart() {
+    const g = window.__game;
+    if (g && g.input && typeof g.input.confirm === 'function') { g.input.confirm(); return; }
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Enter' }));
+  }
+  // Touch buttons feed the same actions as the keyboard.
+  document.getElementById('btn-enter').addEventListener('click', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyE' }));
+  });
+  document.getElementById('btn-shoot').addEventListener('click', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF' }));
+  });
+  document.getElementById('btn-horn').addEventListener('click', () => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyH' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyH' }));
+  });
+  // Clicking anywhere on the title / game-over overlay, or the START button,
+  // starts (or retries) the game.
+  document.getElementById('btn-start').addEventListener('click', (e) => { e.stopPropagation(); confirmStart(); });
+  document.getElementById('screen-title').addEventListener('click', () => confirmStart());
+  document.getElementById('screen-over').addEventListener('click', () => confirmStart());
+
+  // Boot watchdog: the title screen is static HTML, so it shows even if the
+  // game module never loads — which used to look exactly like "Enter/click
+  // does nothing". If the game has not booted after 8 seconds, say so
+  // plainly instead of leaving a dead screen. The check keeps running until
+  // the game appears, so a slow load hides the message again.
+  (function () {
+    const box = document.getElementById('boot-error');
+    const msg = 'The game did not load in this browser. Please open this file in Google Chrome, or Safari 16.4 or newer — or re-download the file, it may be incomplete.';
+    const timer = setInterval(() => {
+      if (window.__game) {
+        clearInterval(timer);
+        if (box) box.style.display = 'none';
+      }
+    }, 500);
+    setTimeout(() => {
+      if (!window.__game && box) { box.textContent = msg; box.style.display = 'block'; }
+    }, 8000);
+    window.addEventListener('error', (e) => {
+      window.__bootErrors.push(String((e && e.message) || 'error'));
+      if (box) { box.textContent = msg; box.style.display = 'block'; }
+    });
+  })();
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

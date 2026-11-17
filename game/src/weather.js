@@ -1,181 +1,199 @@
-// Crown Bay — weather.js rewritten in recorded session fix7, 18 Nov 2026.
-// Time and weather: a full day cycle (morning, noon, golden evening, night),
-// a sun and moon that move, sky and fog that follow, street lights at night,
-// and weather that drifts between clear, cloudy and rain — rain makes the
-// roads wet and slippery and brings its own hiss and falling drops.
-//
-// Night is lit, not pitch black: the moon is strong (1.5) and the hemisphere
-// floor is 0.8, so cars, wheels and pedestrians still read as coloured
-// shapes at night instead of black silhouettes. (The user's night photos
-// showed the player's car as a pure black blob — moon 0.9 + hemi 0.55
-// was not enough for dark paint and dark tyres.)
+// Crown Bay — weather.js rewritten in recorded session fix8, 18 Nov 2026.
+// Crown Bay — the day cycle and the weather, in one place. The clock runs
+// a full 24 hours in about ten minutes of play: dawn, noon, a pink-orange
+// sunset and a dark-blue night, with the sun, the moon and the street
+// lights following it through night01 (0 at noon, 1 at midnight). Weather
+// drifts on its own between clear, cloudy and rain; rain is a real
+// particle field that follows the player and a matching patter in the
+// audio layer. The HUD reads the clock and the period from here, and the
+// screenshot scenes set timeHours / weather directly to stage a moment.
 import * as THREE from 'three';
-import { CITY, PALETTE } from './config.js';
+import { PALETTE } from './config.js';
 
-const DAY_LENGTH = 480; // seconds for a full 24h cycle
+const DAY_LENGTH = 600; // seconds of play per full 24 h day
+const DAWN_START = 5.5;
+const DAWN_END = 7.5;
+const DUSK_START = 17.5;
+const DUSK_END = 19.5;
+const RAIN_DROPS = 900;
+const RAIN_AREA = 90;
+const RAIN_FALL = 55;
+
+const SKY_MORNING = new THREE.Color(0x9fc3e2);
+const SKY_NOON = new THREE.Color(0x87b5d9);
+// PALETTE holds hex numbers, but Color.copy/lerp need Color objects:
+// passing a hex number silently NaNs the colour (black sky, dead sun),
+// so the palette entries weather blends get one Color each, up front.
+const SKY_SUNSET = new THREE.Color(PALETTE.skySunset);
+const SKY_NIGHT = new THREE.Color(PALETTE.skyNight);
+const FOG_DAY = new THREE.Color(PALETTE.fogDay);
+const FOG_NIGHT = new THREE.Color(PALETTE.fogNight);
+const SUN_DAY = new THREE.Color(PALETTE.sunDay);
+
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function smooth(a, b, x) {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+}
+
+// 0 at noon, 1 deep at night, with soft dawn/dusk ramps on both sides.
+function nightFactor(hour) {
+  if (hour >= DAWN_END && hour <= DUSK_START) return 0;
+  if (hour >= DUSK_END || hour <= DAWN_START) return 1;
+  if (hour < DAWN_END) return 1 - smooth(DAWN_START, DAWN_END, hour);
+  return smooth(DUSK_START, DUSK_END, hour);
+}
+
+// How far the sun has sunk below the horizon at dusk, 0..1 — the sunset
+// band is strongest just as night01 starts to climb.
+function sunsetFactor(hour) {
+  const dusk = smooth(DUSK_START - 1.5, DUSK_END, hour);
+  const dawn = 1 - smooth(DAWN_START - 1, DAWN_END, hour);
+  return Math.max(dusk * (1 - nightFactor(hour)), dawn * 0.5);
+}
+
+export function clockText(hour) {
+  const h12 = Math.floor(hour) % 12 === 0 ? 12 : Math.floor(hour) % 12;
+  const mins = Math.floor((hour % 1) * 60);
+  return `${h12}:${String(mins).padStart(2, '0')}`;
+}
+
+export function periodName(hour) {
+  return hour < 12 ? 'AM' : 'PM';
+}
 
 export function createWeather(scene, rng) {
+  // The sun is the only shadow-casting light; the moon is a dim blue
+  // fill so night never goes pitch black, and the hemisphere light lifts
+  // the ground so the streets stay readable after dark.
   const sun = new THREE.DirectionalLight(0xfff2d8, 2.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -90;
-  sun.shadow.camera.right = 90;
-  sun.shadow.camera.top = 90;
-  sun.shadow.camera.bottom = -90;
-  sun.shadow.camera.far = 500;
+  sun.shadow.camera.left = -320;
+  sun.shadow.camera.right = 320;
+  sun.shadow.camera.top = 320;
+  sun.shadow.camera.bottom = -320;
+  sun.shadow.camera.far = 900;
   sun.shadow.bias = -0.0004;
   scene.add(sun);
   scene.add(sun.target);
-  const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x3a4a3a, 0.9);
-  scene.add(hemi);
-  const moon = new THREE.DirectionalLight(0x8fa8ff, 0.0);
-  moon.position.set(-100, 180, -60);
-  scene.add(moon);
 
-  // rain: a sheet of falling points that follows the player
-  const RAIN_N = 2400;
+  const moon = new THREE.DirectionalLight(0x8fa8ff, 0);
+  moon.position.set(-120, 220, -80);
+  scene.add(moon);
+  scene.add(moon.target);
+
+  const hemi = new THREE.HemisphereLight(0xbfd8ee, 0x3a4a3a, 0.9);
+  scene.add(hemi);
+
+  // Rain: one Points cloud, recycled in a box around the player. The
+  // points object itself is the public `rain` handle — the screenshot
+  // scenes toggle its .visible, and weatherStep moves it with the player.
   const rainGeo = new THREE.BufferGeometry();
-  const rainPos = new Float32Array(RAIN_N * 3);
-  const rainVel = new Float32Array(RAIN_N);
-  for (let i = 0; i < RAIN_N; i += 1) {
-    rainPos[i * 3] = rng.range(-60, 60);
-    rainPos[i * 3 + 1] = rng.range(0, 40);
-    rainPos[i * 3 + 2] = rng.range(-60, 60);
-    rainVel[i] = rng.range(28, 42);
+  const drops = new Float32Array(RAIN_DROPS * 3);
+  for (let i = 0; i < RAIN_DROPS; i += 1) {
+    drops[i * 3] = rng.range(-RAIN_AREA / 2, RAIN_AREA / 2);
+    drops[i * 3 + 1] = rng.range(0, 45);
+    drops[i * 3 + 2] = rng.range(-RAIN_AREA / 2, RAIN_AREA / 2);
   }
-  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-  const rain = new THREE.Points(rainGeo, new THREE.PointsMaterial({ color: 0xaac8e8, size: 0.14, transparent: true, opacity: 0.65 }));
-  rain.frustumCulled = false;
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(drops, 3));
+  const rainMat = new THREE.PointsMaterial({
+    color: 0xaec6d8, size: 0.14, transparent: true, opacity: 0.55, sizeAttenuation: true,
+  });
+  const rain = new THREE.Points(rainGeo, rainMat);
   rain.visible = false;
+  rain.frustumCulled = false;
   scene.add(rain);
 
-  // clouds: a few big soft billboards drifting across the sky
-  const clouds = [];
-  const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, roughness: 1 });
-  for (let i = 0; i < 10; i += 1) {
-    const g = new THREE.Group();
-    for (let j = 0; j < 3; j += 1) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), cloudMat);
-      s.scale.set(rng.range(12, 26), rng.range(4, 7), rng.range(8, 14));
-      s.position.set(j * 14 - 14, rng.range(-1, 1), rng.range(-4, 4));
-      g.add(s);
-    }
-    g.position.set(rng.range(-300, 300), rng.range(90, 140), rng.range(-300, 300));
-    scene.add(g);
-    clouds.push({ group: g, speed: rng.range(0.6, 1.6) });
-  }
-
-  const state = {
-    timeHours: 10.5, // start late morning
-    weather: 'clear', // clear | cloudy | rain
-    weatherTimer: 90,
+  return {
+    scene,
+    rng,
+    timeHours: 10.5,
+    weather: 'clear', // 'clear' | 'cloudy' | 'rain'
     raining: false,
     night01: 0,
-    sun,
-    hemi,
-    moon,
     rain,
-    clouds,
-    rainVel,
+    sun,
+    moon,
+    hemi,
+    _changeIn: rng.range(40, 110), // seconds until the weather re-rolls
+    _sky: new THREE.Color(),
+    _fog: new THREE.Color(),
   };
-  return state;
 }
 
-function lerpColor(a, b, t, out) {
-  out.copy(a).lerp(b, t);
-  return out;
+function rollWeather(w) {
+  const roll = w.rng.next();
+  if (w.weather === 'clear') w.weather = roll < 0.55 ? 'clear' : roll < 0.85 ? 'cloudy' : 'rain';
+  else if (w.weather === 'cloudy') w.weather = roll < 0.4 ? 'clear' : roll < 0.75 ? 'cloudy' : 'rain';
+  else w.weather = roll < 0.55 ? 'cloudy' : 'rain';
+  w.raining = w.weather === 'rain';
+  w.rain.visible = w.raining;
+  w._changeIn = w.rng.range(50, 150);
 }
 
-export function weatherStep(w, dt, playerPos) {
-  w.timeHours = (w.timeHours + (dt / DAY_LENGTH) * 24) % 24;
-  const h = w.timeHours;
-  // sun elevation: 0 at 6:00, peak at 13:00, 0 at 20:00
-  const dayT = (h - 6) / 14; // 0..1 across the day
-  const isDay = h > 6 && h < 20;
-  const sunElev = isDay ? Math.sin(dayT * Math.PI) : 0;
-  const azimuth = (h / 24) * Math.PI * 2 - Math.PI / 2;
-  const R = 300;
-  w.sun.position.set(Math.cos(azimuth) * R, Math.max(12, sunElev * 260), Math.sin(azimuth) * R);
-  w.sun.target.position.set(playerPos.x, 0, playerPos.z);
-  // follow the player so shadows stay local
-  w.sun.position.x += playerPos.x;
-  w.sun.position.z += playerPos.z;
-  w.sun.target.updateMatrixWorld();
+export function weatherStep(w, dt, player) {
+  // The clock always runs; rain and clouds roll on their own timer.
+  w.timeHours = (w.timeHours + (dt * 24) / DAY_LENGTH) % 24;
+  w._changeIn -= dt;
+  if (w._changeIn <= 0) rollWeather(w);
 
-  // night factor: 1 deep at night, 0 at midday
-  let night01 = 0;
-  if (h < 5 || h >= 21) night01 = 1;
-  else if (h < 7) night01 = 1 - (h - 5) / 2;
-  else if (h >= 19) night01 = (h - 19) / 2;
-  else if (h >= 17) night01 = (h - 17) / 2 * 0.5;
-  w.night01 = night01;
+  const night = nightFactor(w.timeHours);
+  w.night01 = night;
+  const sunset = sunsetFactor(w.timeHours);
 
-  const sky = new THREE.Color();
-  const fog = new THREE.Color();
-  if (night01 > 0.85) {
-    sky.copy(PALETTE.skyNight); fog.copy(PALETTE.fogNight);
-  } else if (h >= 16.5 && h < 19.5) {
-    const t = Math.min(1, Math.abs(h - 18) / 1.5);
-    lerpColor(PALETTE.skyDay, PALETTE.skySunset, 1 - t * 0.4, sky);
-    lerpColor(PALETTE.fogDay, new THREE.Color(0xc89878), 0.6, fog);
-  } else {
-    sky.copy(PALETTE.skyDay); fog.copy(PALETTE.fogDay);
-  }
-  if (night01 > 0 && night01 < 0.85) {
-    sky.lerp(PALETTE.skyNight, night01 * 0.7);
-    fog.lerp(PALETTE.fogNight, night01 * 0.7);
-  }
-  // weather tints the sky
-  if (w.weather === 'rain') { sky.multiplyScalar(0.55); fog.multiplyScalar(0.6); }
-  else if (w.weather === 'cloudy') { sky.multiplyScalar(0.8); fog.multiplyScalar(0.85); }
+  // Sky: noon blue -> sunset pink-orange -> night dark blue, with a
+  // morning lift so dawn never looks like dusk.
+  w._sky.copy(SKY_NOON);
+  if (w.timeHours < 9) w._sky.lerp(SKY_MORNING, smooth(7.5, 9, w.timeHours) * 0.6);
+  w._sky.lerp(SKY_SUNSET, sunset);
+  w._sky.lerp(SKY_NIGHT, night);
+  if (w.weather === 'cloudy') w._sky.lerp(new THREE.Color(0x7e8ea0), 0.35);
+  if (w.weather === 'rain') w._sky.lerp(new THREE.Color(0x5d6d7d), 0.45);
 
-  w.sun.intensity = isDay ? 2.6 * Math.max(0.15, sunElev) * (w.weather === 'rain' ? 0.4 : w.weather === 'cloudy' ? 0.65 : 1) : 0;
-  w.moon.intensity = night01 * 1.5;
-  w.hemi.intensity = 0.8 + (1 - night01) * 0.35;
+  w._fog.copy(FOG_DAY);
+  w._fog.lerp(FOG_NIGHT, night);
+  w._fog.lerp(w._sky, 0.25);
 
-  // weather drift
-  w.weatherTimer -= dt;
-  if (w.weatherTimer <= 0) {
-    w.weatherTimer = 60 + Math.random() * 120;
-    const r = Math.random();
-    w.weather = r < 0.55 ? 'clear' : r < 0.8 ? 'cloudy' : 'rain';
-    w.raining = w.weather === 'rain';
-    w.rain.visible = w.raining;
-  }
-  // rain falls around the player
+  // Lights follow the same curve: the sun sinks and warms at dusk, the
+  // moon takes over at night, the hemisphere never lets the ground go
+  // fully dark (the night floor is 0.8, not 0).
+  const sunAngle = ((w.timeHours - 6) / 12) * Math.PI;
+  w.sun.position.set(Math.cos(sunAngle) * 260, Math.max(25, Math.sin(sunAngle) * 300), 140);
+  w.sun.target.position.set(0, 0, 0);
+  // Warm the sunlight toward the sunset palette as the sun goes down.
+  w.sun.color.copy(SUN_DAY).lerp(SKY_SUNSET, sunset);
+  w.sun.intensity = 2.6 * (1 - night) + 0.12;
+  w.moon.intensity = 1.5 * night;
+  w.hemi.intensity = 0.9 - night * 0.1;
+  w.hemi.groundColor.setHex(0x3a4a3a);
+
+  // Rain falls around the player and wraps back to the top of the box.
   if (w.raining) {
     const pos = w.rain.geometry.attributes.position;
-    for (let i = 0; i < pos.count; i += 1) {
-      let y = pos.getY(i) - w.rainVel[i] * dt;
-      if (y < 0) {
-        y = 38;
-        pos.setX(i, playerPos.x + (Math.random() - 0.5) * 120);
-        pos.setZ(i, playerPos.z + (Math.random() - 0.5) * 120);
+    const arr = pos.array;
+    const fall = RAIN_FALL * dt;
+    for (let i = 0; i < RAIN_DROPS; i += 1) {
+      arr[i * 3 + 1] -= fall * (0.8 + (i % 5) * 0.1);
+      if (arr[i * 3 + 1] < 0) {
+        arr[i * 3 + 1] = 42 + w.rng.next() * 3;
+        arr[i * 3] = w.rng.range(-RAIN_AREA / 2, RAIN_AREA / 2);
+        arr[i * 3 + 2] = w.rng.range(-RAIN_AREA / 2, RAIN_AREA / 2);
       }
-      pos.setY(i, y);
     }
     pos.needsUpdate = true;
-    w.rain.position.set(0, 0, 0);
+    if (player) {
+      w.rain.position.set(player.x, 0, player.z);
+    }
   }
-  // clouds drift
-  for (const c of w.clouds) {
-    c.group.position.x += c.speed * dt;
-    if (c.group.position.x > 340) c.group.position.x = -340;
-    c.group.material = c.group.children[0].material;
-  }
-  return { sky, fog, night01, hour: h, weather: w.weather, raining: w.raining };
-}
 
-export function clockText(h) {
-  const hh = Math.floor(h) % 24;
-  const mm = Math.floor((h % 1) * 60);
-  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-}
-
-export function periodName(h) {
-  if (h >= 5 && h < 10) return 'Morning';
-  if (h >= 10 && h < 16) return 'Midday';
-  if (h >= 16 && h < 19) return 'Evening';
-  if (h >= 19 || h < 5) return 'Night';
-  return 'Day';
+  return {
+    sky: w._sky,
+    fog: w._fog,
+    night01: night,
+    raining: w.raining,
+  };
 }

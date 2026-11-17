@@ -1,222 +1,305 @@
-// Crown Bay — hud.js rewritten in recorded session fix7, 18 Nov 2026.
-// HUD: cash, health, wanted stars, clock and weather, the mission objective,
-// speed, messages, and a live minimap drawn on a 2D canvas from the real
-// street grid — plus the title, pause and game-over screens.
-// Screens are DOM overlays in index.html; this module owns their text.
+// Crown Bay — the HUD: everything the player reads while playing.
+// Cash and health, the wanted stars, the clock and the weather, the
+// current job, the speed, the transient messages, and the round
+// minimap that shows the real streets. The screens (title, pause,
+// game over) are toggled here too.
+//
+// The HUD builds its own DOM when the page does not already provide
+// it, and reuses the page's elements when it does — the minimap
+// canvas, for example, lives in the page as #minimap, and this module
+// draws on it rather than making a second one.
 import { CITY, STREET_CENTERS } from './config.js';
-import { clockText, periodName } from './weather.js';
+
+function makeDiv(id, css) {
+  const el = document.createElement('div');
+  el.id = id;
+  el.style.cssText = css;
+  document.body.appendChild(el);
+  return el;
+}
+
+function findOrMake(id, css) {
+  return document.getElementById(id) || makeDiv(id, css);
+}
 
 export function createHud() {
-  const $ = (id) => document.getElementById(id);
-  const el = {
-    cash: $('hud-cash'),
-    healthFill: $('hud-health-fill'),
-    healthText: $('hud-health-text'),
-    stars: $('hud-stars'),
-    clock: $('hud-clock'),
-    weather: $('hud-weather'),
-    missionTitle: $('hud-mission-title'),
-    missionText: $('hud-mission-text'),
-    speed: $('hud-speed-num'),
-    speedUnit: $('hud-speed-unit'),
-    message: $('hud-message'),
-    prompt: $('hud-prompt'),
-    minimap: $('minimap'),
-    title: $('screen-title'),
-    pause: $('screen-pause'),
-    over: $('screen-over'),
-    overTitle: $('over-title'),
-    overLines: $('over-lines'),
-    overPrompt: $('over-prompt'),
-    titleBest: $('title-best'),
-    titleSave: $('title-save'),
-    crosshair: $('crosshair'),
-    vignette: $('vignette'),
-  };
-  const mm = el.minimap.getContext('2d');
-  let messageTimer = 0;
-  let lastCash = -1, lastHealth = -1, lastStars = -1, lastClock = '', lastSpeed = -1;
+  // --- readouts -------------------------------------------------------
+  const bar = findOrMake(
+    'cb-hud-bar',
+    'position:fixed;top:14px;left:14px;z-index:20;pointer-events:none;color:#fff;font-family:system-ui,sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.8);',
+  );
+  bar.innerHTML = '<div id="cb-cash" style="font-size:22px;font-weight:700;">$0</div>'
+    + '<div style="width:170px;height:12px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.5);border-radius:6px;margin-top:6px;overflow:hidden;">'
+    + '<div id="cb-health-fill" style="height:100%;width:100%;background:#37d67a;"></div></div>'
+    + '<div id="cb-ammo" style="font-size:13px;margin-top:5px;opacity:.9;"></div>';
+  const cashEl = document.getElementById('cb-cash');
+  const healthFill = document.getElementById('cb-health-fill');
+  const ammoEl = document.getElementById('cb-ammo');
 
-  function show(elName, on) {
-    if (el[elName]) el[elName].style.display = on ? '' : 'none';
+  const clockEl = findOrMake(
+    'cb-clock',
+    'position:fixed;top:14px;right:14px;z-index:20;pointer-events:none;color:#fff;font-family:system-ui,sans-serif;font-size:15px;text-align:right;text-shadow:0 1px 3px rgba(0,0,0,.8);',
+  );
+  const wantedEl = findOrMake(
+    'cb-wanted',
+    'position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:20;pointer-events:none;font-size:26px;letter-spacing:6px;color:#ffd23c;text-shadow:0 2px 6px rgba(0,0,0,.9);',
+  );
+  const missionEl = findOrMake(
+    'cb-mission',
+    'position:fixed;top:96px;left:14px;z-index:20;pointer-events:none;color:#ffe9a8;font-family:system-ui,sans-serif;font-size:14px;max-width:300px;text-shadow:0 1px 3px rgba(0,0,0,.85);',
+  );
+  const speedEl = findOrMake(
+    'cb-speed',
+    'position:fixed;bottom:16px;right:16px;z-index:20;pointer-events:none;color:#fff;font-family:system-ui,sans-serif;font-size:26px;font-weight:700;text-shadow:0 1px 4px rgba(0,0,0,.8);',
+  );
+  const messageEl = findOrMake(
+    'cb-message',
+    'position:fixed;bottom:84px;left:50%;transform:translateX(-50%);z-index:20;pointer-events:none;color:#fff;background:rgba(10,10,20,.72);font-family:system-ui,sans-serif;font-size:15px;padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .25s;max-width:70vw;text-align:center;',
+  );
+  const promptEl = findOrMake(
+    'cb-prompt',
+    'position:fixed;bottom:44px;left:50%;transform:translateX(-50%);z-index:20;pointer-events:none;color:#fff;font-family:system-ui,sans-serif;font-size:14px;text-shadow:0 1px 3px rgba(0,0,0,.9);',
+  );
+
+  // --- minimap ----------------------------------------------------------
+  // The page owns the canvas when it has one (#minimap, inside
+  // #minimap-wrap); otherwise the HUD makes its own round one in the
+  // bottom-left corner. The world resizes it by id when the player
+  // asks for the big map (M), so the id must stay 'minimap'.
+  let mapCanvas = document.getElementById('minimap');
+  // The page's own wrap starts hidden (display:none in the markup):
+  // the canvas draws either way, but nobody sees it until the wrap
+  // shows. Unhide it here — the title/pause/over overlays sit above
+  // it, so it only reads while playing.
+  const pageWrap = document.getElementById('minimap-wrap');
+  if (pageWrap) pageWrap.style.display = 'block';
+  if (!mapCanvas) {
+    const wrap = document.getElementById('minimap-wrap') || makeDiv(
+      'minimap-wrap',
+      'position:fixed;left:14px;bottom:14px;z-index:20;width:220px;height:220px;border-radius:50%;overflow:hidden;border:3px solid rgba(255,255,255,.75);box-shadow:0 2px 10px rgba(0,0,0,.5);',
+    );
+    mapCanvas = document.createElement('canvas');
+    mapCanvas.id = 'minimap';
+    mapCanvas.width = 220;
+    mapCanvas.height = 220;
+    wrap.appendChild(mapCanvas);
+  }
+  const mapCtx = mapCanvas.getContext('2d');
+
+  // --- screens ----------------------------------------------------------
+  // A screen is any element that carries data-screen="title" (or an
+  // id like screen-title); the page's own overlays use the same hook,
+  // so the HUD never builds a second title screen on top of the
+  // page's START button — it reuses the one that is already there.
+  function screenEl(name) {
+    return document.querySelector(`[data-screen="${name}"]`)
+      || document.getElementById(`screen-${name}`)
+      || document.querySelector(`.screen-${name}`);
+  }
+  function ensureScreen(name) {
+    let el = screenEl(name);
+    if (el) return el;
+    // Created hidden: showScreen decides when a screen appears, so
+    // a screen the page never asked for never flashes over the game.
+    el = document.createElement('div');
+    el.setAttribute('data-screen', name);
+    el.style.cssText = 'position:fixed;inset:0;z-index:30;display:none;flex-direction:column;align-items:center;justify-content:center;background:rgba(6,8,18,.72);color:#fff;font-family:system-ui,sans-serif;text-align:center;';
+    document.body.appendChild(el);
+    return el;
   }
 
-  return {
-    showScreen(name) {
-      show('title', name === 'title');
-      show('pause', name === 'paused');
-      show('over', name === 'over');
-      const inGame = name === 'play';
-      for (const id of ['hud-cash', 'hud-health', 'hud-stars', 'hud-clock', 'hud-weather', 'hud-mission', 'hud-speed', 'hud-message', 'hud-prompt', 'minimap-wrap']) {
-        const n = document.getElementById(id);
-        if (n) n.style.display = inGame ? '' : 'none';
-      }
-      if (el.crosshair) el.crosshair.style.display = inGame ? '' : 'none';
-    },
-    setTitleBest(text) { if (el.titleBest) el.titleBest.textContent = text; },
-    setTitleSave(text) { if (el.titleSave) el.titleSave.textContent = text; },
-    setOver(title, lines, prompt) {
-      if (el.overTitle) el.overTitle.textContent = title;
-      if (el.overLines) el.overLines.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
-      if (el.overPrompt) el.overPrompt.textContent = prompt;
-    },
+  // The title screen is the page's own overlay when it has one (the
+  // one with the START button); the HUD's copy is only a fallback.
+  function titleScreen() {
+    return screenEl('title') || document.querySelector('.screen') || ensureScreen('title');
+  }
+
+  let messageTimer = 0;
+
+  function clockText(hour) {
+    const h = Math.floor(hour) % 24;
+    const m = Math.floor((hour % 1) * 60);
+    const hh = String(h).padStart(2, '0');
+    const mm = String(m).padStart(2, '0');
+    const period = hour < 5 || hour >= 18 ? 'night' : hour < 11 ? 'morning' : hour < 15 ? 'midday' : hour < 18 ? 'afternoon' : 'evening';
+    return `${hh}:${mm} · ${period}`;
+  }
+
+  const hud = {
     message(text, seconds = 3) {
-      if (!el.message) return;
-      el.message.textContent = text;
-      el.message.style.opacity = '1';
+      messageEl.textContent = text;
+      messageEl.style.opacity = '1';
       messageTimer = seconds;
     },
     prompt(text) {
-      if (el.prompt) el.prompt.textContent = text || '';
+      promptEl.textContent = text || '';
     },
-    update(dt, s) {
-      // s: {cash, health, wanted, hour, weather, missionTitle, missionText, speedKmh, inVehicle, lowHealth}
-      if (s.cash !== lastCash) { lastCash = s.cash; if (el.cash) el.cash.textContent = `$${s.cash.toLocaleString('en-US')}`; }
-      const hp = Math.max(0, Math.round(s.health));
-      if (hp !== lastHealth) {
-        lastHealth = hp;
-        if (el.healthFill) el.healthFill.style.width = `${hp}%`;
-        if (el.healthFill) el.healthFill.style.background = hp > 50 ? '#3a8a5f' : hp > 25 ? '#e8a800' : '#c8102e';
-        if (el.healthText) el.healthText.textContent = `${hp}`;
+    showScreen(name) {
+      // Every overlay hides; only the named one shows. 'play' shows
+      // none of them, so the game itself is the whole screen. The
+      // title resolves to the page's own overlay (with its START
+      // button) whenever it has one.
+      document.querySelectorAll('[data-screen], .screen').forEach((el) => {
+        el.style.display = 'none';
+      });
+      if (name === 'play') return;
+      const el = name === 'title' ? titleScreen() : ensureScreen(name);
+      el.style.display = 'flex';
+    },
+    setOver(title, lines, hint) {
+      const el = ensureScreen('over');
+      const body = lines.map((line) => `<p style="margin:4px 0;font-size:16px;opacity:.92;">${line}</p>`).join('');
+      el.innerHTML = `<h1 style="font-size:44px;margin:0 0 10px;letter-spacing:4px;">${title}</h1>${body}`
+        + `<p style="margin-top:18px;font-size:14px;opacity:.75;">${hint || ''}</p>`;
+    },
+    setTitleBest(text) {
+      let el = document.getElementById('title-best');
+      if (!el) {
+        const screen = titleScreen();
+        el = document.createElement('div');
+        el.id = 'title-best';
+        el.style.cssText = 'font-size:15px;opacity:.85;margin-top:10px;';
+        screen.appendChild(el);
       }
-      if (s.wanted !== lastStars) {
-        lastStars = s.wanted;
-        if (el.stars) {
-          el.stars.textContent = '★'.repeat(s.wanted) + '☆'.repeat(5 - s.wanted);
-          el.stars.style.color = s.wanted === 0 ? '#888888' : s.wanted < 3 ? '#e8b800' : '#ff2211';
-        }
+      el.textContent = text;
+    },
+    setTitleSave(text) {
+      let el = document.getElementById('title-save');
+      if (!el) {
+        const screen = titleScreen();
+        el = document.createElement('div');
+        el.id = 'title-save';
+        el.style.cssText = 'font-size:14px;opacity:.7;margin-top:4px;';
+        screen.appendChild(el);
       }
-      const clock = `${clockText(s.hour)} ${periodName(s.hour)}`;
-      if (clock !== lastClock) { lastClock = clock; if (el.clock) el.clock.textContent = clock; }
-      if (el.weather) el.weather.textContent = s.weather === 'rain' ? '🌧 Rain' : s.weather === 'cloudy' ? '☁ Cloudy' : '☀ Clear';
-      if (el.missionTitle) el.missionTitle.textContent = s.missionTitle;
-      if (el.missionText) el.missionText.textContent = s.missionText;
-      const kmh = Math.round(s.speedKmh);
-      if (kmh !== lastSpeed) {
-        lastSpeed = kmh;
-        if (el.speed) el.speed.textContent = s.inVehicle ? String(kmh) : '';
-        if (el.speedUnit) el.speedUnit.textContent = s.inVehicle ? 'km/h' : '';
-      }
+      el.textContent = text;
+    },
+    update(dt, stats) {
       if (messageTimer > 0) {
         messageTimer -= dt;
-        if (messageTimer <= 0 && el.message) el.message.style.opacity = '0';
+        if (messageTimer <= 0) messageEl.style.opacity = '0';
       }
-      if (el.vignette) el.vignette.style.opacity = s.lowHealth ? '1' : '0';
+      cashEl.textContent = `$${Math.floor(stats.cash).toLocaleString('en-US')}`;
+      const hp = Math.max(0, Math.min(100, stats.health));
+      healthFill.style.width = `${hp}%`;
+      healthFill.style.background = hp < 30 ? '#e83c3c' : hp < 60 ? '#e8a83c' : '#37d67a';
+      bar.style.opacity = stats.lowHealth && Math.floor(performance.now() / 400) % 2 === 0 ? '0.55' : '1';
+      // The ammo readout lives here so the bar stays honest when the
+      // player is on foot; the world passes it through stats when it
+      // has one, and the line simply stays blank while driving.
+      ammoEl.textContent = stats.ammoText || '';
+      clockEl.textContent = `${clockText(stats.hour)}${stats.weather ? ` · ${stats.weather}` : ''}`;
+      wantedEl.textContent = stats.wanted > 0 ? '★'.repeat(Math.min(5, stats.wanted)) : '';
+      missionEl.innerHTML = `<div style="font-weight:700;font-size:15px;">${stats.missionTitle}</div>`
+        + `<div style="opacity:.9;">${stats.missionText}</div>`;
+      speedEl.textContent = stats.inVehicle && stats.speedKmh > 1 ? `${Math.round(stats.speedKmh)} km/h` : '';
     },
-    drawMinimap(s) {
-      // s: {playerX, playerZ, playerHeading, police: [{x,z}], marker: {x,z}|null, inClub}
-      // A real map, not a pixel grid: one continuous landmass inside a
-      // circular frame, roads as smooth cased lines, sea + beach on the
-      // east edge, a dashed route line to the objective. No block squares.
-      const W = el.minimap.width, H = el.minimap.height;
-      const cx0 = W / 2, cy0 = H / 2, R = W / 2 - 1;
-      const minX = -310, maxX = 520, minZ = -310, maxZ = 310;
-      // uniform scale so streets stay square on the map
-      const scale = Math.min((R * 2 - 4) / (maxX - minX), (R * 2 - 4) / (maxZ - minZ));
-      const ox = cx0 - ((maxX - minX) * scale) / 2;
-      const oy = cy0 - ((maxZ - minZ) * scale) / 2;
-      const sx = (x) => ox + (x - minX) * scale;
-      const sz = (z) => oy + (z - minZ) * scale;
-      // keep icons inside the circle
-      const clampIcon = (x, z) => {
-        const dx = x - cx0, dz = z - cy0;
-        const d = Math.hypot(dx, dz) || 1;
-        const m = Math.min(1, (R - 10) / d);
-        return [cx0 + dx * m, cy0 + dz * m];
-      };
-      const rr = (x, y, w, h, r) => {
-        mm.beginPath();
-        mm.moveTo(x + r, y);
-        mm.arcTo(x + w, y, x + w, y + h, r);
-        mm.arcTo(x + w, y + h, x, y + h, r);
-        mm.arcTo(x, y + h, x, y, r);
-        mm.arcTo(x, y, x + w, y, r);
-        mm.closePath();
-      };
-      const roadLine = (x1, z1, x2, z2) => {
-        mm.beginPath(); mm.moveTo(sx(x1), sz(z1)); mm.lineTo(sx(x2), sz(z2)); mm.stroke();
-      };
-
-      mm.clearRect(0, 0, W, H);
-      mm.save();
-      mm.beginPath(); mm.arc(cx0, cy0, R, 0, Math.PI * 2); mm.clip();
-      // land: one continuous field
-      mm.fillStyle = '#46523f';
-      mm.fillRect(0, 0, W, H);
-      // Meridian Park: soft green rounded blob (block 4,6)
-      mm.fillStyle = '#3d6b2e';
-      rr(sx(-51), sz(65), sx(-7) - sx(-51), sz(109) - sz(65), 8);
-      mm.fill();
-      // beach + sea on the east edge
-      mm.fillStyle = '#c9b078';
-      mm.fillRect(sx(298), 0, sx(314) - sx(298), H);
-      mm.fillStyle = '#1d5f82';
-      mm.fillRect(sx(314), 0, W - sx(314), H);
-      // Lighthouse Island: sand disc in the sea
-      mm.fillStyle = '#c9b078';
-      mm.beginPath(); mm.arc(sx(470), sz(58), 34 * scale, 0, Math.PI * 2); mm.fill();
-      // roads: dark casing, then a lighter surface — smooth, consistent
-      mm.lineCap = 'round'; mm.lineJoin = 'round';
-      mm.strokeStyle = '#23282d'; mm.lineWidth = 7;
-      for (const c of STREET_CENTERS) { roadLine(-297, c, 297, c); roadLine(c, -297, c, 297); }
-      mm.strokeStyle = '#8a9097'; mm.lineWidth = 4.5;
-      for (const c of STREET_CENTERS) { roadLine(-297, c, 297, c); roadLine(c, -297, c, 297); }
-      // Harbor Bridge: road over the bay to Lighthouse Island
-      mm.strokeStyle = '#23282d'; mm.lineWidth = 7;
-      roadLine(290, 58, 470, 58);
-      mm.strokeStyle = '#8a9097'; mm.lineWidth = 4.5;
-      roadLine(290, 58, 470, 58);
-      // Crown Pier + ferris wheel
-      mm.strokeStyle = '#8a9097'; mm.lineWidth = 4.5;
-      roadLine(314, 87, 368, 87);
-      mm.fillStyle = '#ff2ad8';
-      mm.beginPath(); mm.arc(sx(360), sz(87), 4, 0, Math.PI * 2); mm.fill();
-      // airfield runway: dark strip with white centre dashes
-      mm.strokeStyle = '#22262a'; mm.lineWidth = 6;
-      roadLine(-351, 269, -171, 269);
-      mm.strokeStyle = '#ffffff'; mm.lineWidth = 1.2; mm.setLineDash([5, 7]);
-      roadLine(-351, 269, -171, 269);
-      mm.setLineDash([]);
-      // route line to the objective (dashed pink, like a GPS route)
-      if (s.marker) {
-        mm.strokeStyle = '#ff4d6a'; mm.lineWidth = 3; mm.setLineDash([7, 5]);
-        mm.beginPath(); mm.moveTo(sx(s.playerX), sz(s.playerZ)); mm.lineTo(sx(s.marker.x), sz(s.marker.z)); mm.stroke();
-        mm.setLineDash([]);
-        const [mx, mz] = clampIcon(sx(s.marker.x), sz(s.marker.z));
-        const pulse = 6 + Math.sin(performance.now() / 200) * 2;
-        mm.fillStyle = '#ffd23c';
-        mm.beginPath(); mm.arc(mx, mz, pulse, 0, Math.PI * 2); mm.fill();
-        mm.strokeStyle = '#000'; mm.lineWidth = 2;
-        mm.beginPath(); mm.arc(mx, mz, pulse, 0, Math.PI * 2); mm.stroke();
+    drawMinimap(args) {
+      const size = mapCanvas.width || 220;
+      const ctx = mapCtx;
+      if (!ctx) return;
+      const half = CITY.half + 230; // the frame covers the city plus the bay
+      const toMap = (x, z) => [
+        ((x + half) / (half * 2)) * size,
+        ((z + half) / (half * 2)) * size,
+      ];
+      ctx.clearRect(0, 0, size, size);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      ctx.clip();
+      // The bay: everything east of the beach is water.
+      const [seaX] = toMap(CITY.seaX, 0);
+      ctx.fillStyle = '#1b6a8a';
+      ctx.fillRect(seaX, 0, size - seaX, size);
+      // Land: one continuous shape, never a grid of squares.
+      ctx.fillStyle = '#3d6a35';
+      ctx.fillRect(0, 0, seaX, size);
+      ctx.fillStyle = '#c9b183';
+      const [beachX] = toMap(CITY.beachX - 8, 0);
+      ctx.fillRect(beachX, 0, Math.max(2, seaX - beachX), size);
+      // Meridian Park, a rounded green blob on the west side.
+      const [parkX, parkY] = toMap(-174, 116);
+      ctx.fillStyle = '#2f7a2e';
+      ctx.beginPath();
+      ctx.arc(parkX, parkY, size * 0.045, 0, Math.PI * 2);
+      ctx.fill();
+      // Streets: dark casing under a pale surface, round caps, so the
+      // roads read as smooth lines rather than a checkerboard.
+      ctx.lineCap = 'round';
+      for (const c of STREET_CENTERS) {
+        const [x1, y1] = toMap(c, -CITY.half);
+        const [x2, y2] = toMap(c, CITY.half);
+        ctx.strokeStyle = '#20242a';
+        ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        ctx.strokeStyle = '#c8c2b2';
+        ctx.lineWidth = 4.5;
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        const [hx1, hy1] = toMap(-CITY.half, c);
+        const [hx2, hy2] = toMap(CITY.half, c);
+        ctx.strokeStyle = '#20242a';
+        ctx.lineWidth = 7;
+        ctx.beginPath(); ctx.moveTo(hx1, hy1); ctx.lineTo(hx2, hy2); ctx.stroke();
+        ctx.strokeStyle = '#c8c2b2';
+        ctx.lineWidth = 4.5;
+        ctx.beginPath(); ctx.moveTo(hx1, hy1); ctx.lineTo(hx2, hy2); ctx.stroke();
       }
-      // police
-      mm.fillStyle = '#2244ff';
-      mm.strokeStyle = '#ffffff'; mm.lineWidth = 1.5;
-      for (const p of s.police) {
-        const [px, pz] = clampIcon(sx(p.x), sz(p.z));
-        mm.beginPath(); mm.arc(px, pz, 4, 0, Math.PI * 2); mm.fill(); mm.stroke();
+      // The Harbor Bridge, east across the bay, and the pier.
+      const [b1x, b1y] = toMap(292, 58);
+      const [b2x, b2y] = toMap(470, 58);
+      ctx.strokeStyle = '#c8c2b2';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(b1x, b1y); ctx.lineTo(b2x, b2y); ctx.stroke();
+      const [p1x, p1y] = toMap(316, 87);
+      const [p2x, p2y] = toMap(368, 87);
+      ctx.strokeStyle = '#8a6a4a';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(p1x, p1y); ctx.lineTo(p2x, p2y); ctx.stroke();
+      // Route to the objective: a pink dotted line from the player.
+      if (args.marker) {
+        const [mx, my] = toMap(args.marker.x, args.marker.z);
+        const [px, py] = toMap(args.playerX, args.playerZ);
+        ctx.strokeStyle = '#ff5a8a';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 5]);
+        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(mx, my); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffd23c';
+        ctx.beginPath(); ctx.arc(mx, my, 5 + Math.sin(performance.now() / 280) * 1.5, 0, Math.PI * 2); ctx.fill();
       }
-      // player arrow with a soft halo so it always reads
-      const [px, pz] = clampIcon(sx(s.playerX), sz(s.playerZ));
-      mm.fillStyle = 'rgba(255,255,255,0.25)';
-      mm.beginPath(); mm.arc(px, pz, 11, 0, Math.PI * 2); mm.fill();
-      mm.save();
-      mm.translate(px, pz);
-      mm.rotate(Math.atan2(Math.sin(s.playerHeading), Math.cos(s.playerHeading)) + Math.PI / 2);
-      mm.fillStyle = '#ffffff';
-      mm.beginPath(); mm.moveTo(0, -8); mm.lineTo(6, 7); mm.lineTo(-6, 7); mm.closePath(); mm.fill();
-      mm.strokeStyle = '#000'; mm.lineWidth = 1.5; mm.stroke();
-      mm.restore();
-      // north
-      mm.fillStyle = '#fff';
-      mm.font = 'bold 11px system-ui, sans-serif';
-      mm.textAlign = 'center';
-      mm.fillText('N', cx0, 16);
-      mm.beginPath(); mm.moveTo(cx0, 19); mm.lineTo(cx0 - 4, 26); mm.lineTo(cx0 + 4, 26); mm.closePath(); mm.fill();
-      mm.restore();
-      // frame ring
-      mm.strokeStyle = 'rgba(255,255,255,0.55)'; mm.lineWidth = 3;
-      mm.beginPath(); mm.arc(cx0, cy0, R - 1.5, 0, Math.PI * 2); mm.stroke();
+      // Police: blue dots with a white ring.
+      for (const p of args.police || []) {
+        const [x, y] = toMap(p.x, p.z);
+        ctx.fillStyle = '#2a6ad8';
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      // The player: a white arrow with a soft halo, always on top.
+      const [px, py] = toMap(args.playerX, args.playerZ);
+      ctx.fillStyle = 'rgba(255,255,255,.35)';
+      ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(-args.playerHeading);
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.moveTo(8, 0); ctx.lineTo(-6, -5); ctx.lineTo(-6, 5); ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      // North, top-right.
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText('N ▲', size - 10, 18);
+      ctx.restore();
+      // The round frame.
+      ctx.strokeStyle = 'rgba(255,255,255,.8)';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2 - 1.5, 0, Math.PI * 2); ctx.stroke();
     },
   };
+  return hud;
 }

@@ -1,145 +1,188 @@
-// Crown Bay — player.js rewritten in recorded session fix7, 18 Nov 2026.
-// Rook — the player on foot. A low-poly figure in a black jacket, moved with
-// WASD relative to the camera, with jump, sprint and a pistol. Collides with
-// building boxes (circle vs AABB) and stays inside the city.
+// Crown Bay — Rook, on foot. The mesh (a low-poly figure in a red
+// cap, jacket and jeans, gun in hand), the state the world carries
+// around (cash, health, ammo), the step that walks him through the
+// streets, and the shot that decides what a bullet hits.
+//
+// On foot the player is a circle of radius 0.5 m against the same
+// axis-aligned colliders the cars use, so he can slip between a
+// parked car and a shopfront but never through a wall. His height
+// follows the ground under him — street level, or the bridge deck
+// eight metres up — and a jump is a small arc that lands back on it.
 import * as THREE from 'three';
 import { CITY, PLAYER } from './config.js';
 import { eastMaxX, groundHeightAt } from './city.js';
-import { createPedMesh } from './peds.js';
 
-const plBox = new THREE.BoxGeometry(1, 1, 1);
+const BODY_RADIUS = 0.5;
+
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.05 }),
+  );
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  return mesh;
+}
 
 export function createPlayerMesh() {
-  // Rook: black jacket, dark jeans, backwards cap — distinct from any ped.
-  const group = new THREE.Group();
-  const jacket = new THREE.MeshStandardMaterial({ color: 0x1a1a22, roughness: 0.7 });
-  const jeans = new THREE.MeshStandardMaterial({ color: 0x2a3a5a, roughness: 0.85 });
-  const skin = new THREE.MeshStandardMaterial({ color: 0xd8a878, roughness: 0.8 });
-  const capM = new THREE.MeshStandardMaterial({ color: 0xc8102e, roughness: 0.7 });
-  const legL = new THREE.Mesh(plBox, jeans);
-  legL.scale.set(0.15, 0.8, 0.17); legL.position.set(-0.12, 0.4, 0);
-  const legR = legL.clone(); legR.position.x = 0.12;
-  const torso = new THREE.Mesh(plBox, jacket);
-  torso.scale.set(0.55, 0.64, 0.3); torso.position.y = 1.12;
-  const armL = new THREE.Mesh(plBox, jacket);
-  armL.scale.set(0.13, 0.6, 0.15); armL.position.set(-0.35, 1.12, 0);
-  const armR = armL.clone(); armR.position.x = 0.35;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 12, 10), skin);
-  head.position.y = 1.62;
-  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), capM);
-  cap.position.y = 1.66;
-  const brim = new THREE.Mesh(plBox, capM);
-  brim.scale.set(0.3, 0.04, 0.22); brim.position.set(0, 1.68, 0.26);
-  // pistol in the right hand
-  const gun = new THREE.Mesh(plBox, new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4, metalness: 0.7 }));
-  gun.scale.set(0.08, 0.1, 0.34); gun.position.set(0.35, 0.86, 0.14);
-  for (const m of [legL, legR, torso, armL, armR, head, cap, brim, gun]) { m.castShadow = true; group.add(m); }
-  group.userData = { legL, legR, armL, armR, torso, gun };
-  return group;
+  const g = new THREE.Group();
+  // Legs: dark jeans, swinging opposite when he walks.
+  const legL = box(0.16, 0.78, 0.18, 0x2a2f3a, -0.11, 0.39, 0);
+  const legR = box(0.16, 0.78, 0.18, 0x2a2f3a, 0.11, 0.39, 0);
+  legL.geometry.translate(0, -0.39, 0);
+  legR.geometry.translate(0, -0.39, 0);
+  legL.position.y = 0.78;
+  legR.position.y = 0.78;
+  // Torso: a rust-red jacket over a dark shirt.
+  const torso = box(0.46, 0.62, 0.26, 0x8a2f24, 0, 1.09, 0);
+  const shirt = box(0.3, 0.4, 0.28, 0x1c1c22, 0, 1.06, 0);
+  // Arms: jacket sleeves, the right one holding the pistol forward.
+  const armL = box(0.13, 0.58, 0.15, 0x8a2f24, -0.3, 1.12, 0);
+  const armR = box(0.13, 0.58, 0.15, 0x8a2f24, 0.3, 1.12, 0.08);
+  armL.geometry.translate(0, -0.29, 0);
+  armR.geometry.translate(0, -0.29, 0);
+  armL.position.y = 1.4;
+  armR.position.y = 1.4;
+  armR.rotation.x = -1.2;
+  // Head: skin, and the red cap Rook is known by.
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.19, 12, 10),
+    new THREE.MeshStandardMaterial({ color: 0xd8a075, roughness: 0.7 }),
+  );
+  head.position.set(0, 1.62, 0);
+  head.castShadow = true;
+  const cap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.2, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2.4),
+    new THREE.MeshStandardMaterial({ color: 0xc8102e, roughness: 0.6 }),
+  );
+  cap.position.set(0, 1.66, 0);
+  const brim = box(0.24, 0.04, 0.2, 0xc8102e, 0, 1.72, 0.2);
+  // The pistol, dark, in the right hand.
+  const gun = box(0.06, 0.09, 0.3, 0x1a1a1a, 0.3, 1.05, 0.32);
+  g.add(legL, legR, torso, shirt, armL, armR, head, cap, brim, gun);
+  g.userData.legs = { legL, legR, armL, armR };
+  g.userData.walkPhase = 0;
+  return g;
 }
 
 export function createPlayerState(x, z) {
   return {
-    x, z, y: 0, vy: 0,
-    heading: 0, // facing, radians (0 = +x)
-    speed: 0,
-    health: PLAYER.health,
+    x, z, y: 0,
+    heading: 0,
     cash: 0,
-    ammo: 12,
-    ammoReserve: 60,
+    health: PLAYER.health,
+    ammo: PLAYER.ammo,
+    ammoReserve: PLAYER.ammoReserve,
     reloading: 0,
-    inVehicle: null, // vehicle object or null
+    inVehicle: null,
     invulnerable: 0,
+    vy: 0,
     walkPhase: 0,
-    grounded: true,
-    bustedTimer: 0,
+    moving: false,
   };
 }
 
-// Move on foot. move {x: strafe, y: forward} relative to camera yaw.
-// bounds: the rectangle the player may walk in (city by default, the club
-// interior while inside — the club sits south of the city, past the clamp).
-export function playerStep(p, move, camYaw, run, jump, dt, colliders, bounds) {
-  const b = bounds || { minX: -CITY.half - 6, maxX: CITY.seaX - 2, minZ: -CITY.half - 6, maxZ: CITY.half + 6 };
-  const speed = run ? PLAYER.runSpeed : PLAYER.walkSpeed;
-  const sin = Math.sin(camYaw), cos = Math.cos(camYaw);
-  // camera forward on the ground plane: (cos, sin) when yaw is measured from +x
-  const fx = cos, fz = sin;
-  const rx = -sin, rz = cos;
-  let mx = fx * move.y + rx * move.x;
-  let mz = fz * move.y + rz * move.x;
-  const len = Math.hypot(mx, mz);
-  if (len > 0.01) {
-    mx /= len; mz /= len;
-    p.heading = Math.atan2(mz, mx);
-    p.speed = speed;
-  } else {
-    p.speed = 0;
-  }
-  let nx = p.x + mx * p.speed * dt;
-  let nz = p.z + mz * p.speed * dt;
-  // circle vs AABB push-out
-  const r = PLAYER.radius;
+// Circle-vs-AABB push-out, the same shape the cars use: cheap, and
+// it never lets the player tunnel through a wall in one frame.
+function collideCircle(player, nx, nz, colliders) {
   for (const c of colliders) {
     const cx = Math.max(c.x - c.hx, Math.min(nx, c.x + c.hx));
     const cz = Math.max(c.z - c.hz, Math.min(nz, c.z + c.hz));
-    const dx = nx - cx, dz = nz - cz;
+    const dx = nx - cx;
+    const dz = nz - cz;
     const d2 = dx * dx + dz * dz;
-    if (d2 < r * r) {
+    if (d2 < BODY_RADIUS * BODY_RADIUS) {
       const d = Math.sqrt(d2) || 0.001;
-      nx = cx + (dx / d) * r;
-      nz = cz + (dz / d) * r;
+      nx = cx + (dx / d) * BODY_RADIUS;
+      nz = cz + (dz / d) * BODY_RADIUS;
     }
   }
-  // east of the waterline only the bridge road, the island, the pier and
-  // the wheel platform are walkable (eastMaxX on the prospective position)
-  const maxX = bounds ? b.maxX : eastMaxX(p.x, p.z, nx, nz);
-  nx = Math.max(b.minX, Math.min(maxX, nx));
-  nz = Math.max(b.minZ, Math.min(b.maxZ, nz));
-  p.x = nx; p.z = nz;
-  // jump / gravity (ground height: bridge deck, ramps, pier, island)
-  const gy = groundHeightAt(p.x, p.z);
-  if (jump && p.grounded) { p.vy = PLAYER.jumpSpeed; p.grounded = false; }
-  if (!p.grounded) {
-    p.vy -= PLAYER.gravity * dt;
-    p.y += p.vy * dt;
-    if (p.y <= gy) { p.y = gy; p.vy = 0; p.grounded = true; }
+  return { x: nx, z: nz };
+}
+
+export function playerStep(player, move, camYaw, run, jump, dt, colliders, bounds) {
+  // Wish direction: forward is where the camera looks, strafe is
+  // sideways to it. The character turns toward where he is going.
+  const fx = Math.cos(camYaw);
+  const fz = Math.sin(camYaw);
+  const rx = -fz;
+  const rz = fx;
+  let wx = fx * move.y + rx * move.x;
+  let wz = fz * move.y + rz * move.x;
+  const len = Math.hypot(wx, wz);
+  player.moving = len > 0.05;
+  if (player.moving) {
+    wx /= len;
+    wz /= len;
+    player.heading = Math.atan2(wz, wx);
+  }
+  const speed = run ? PLAYER.run : PLAYER.walk;
+  let nx = player.x + wx * speed * dt * (player.moving ? 1 : 0);
+  let nz = player.z + wz * speed * dt * (player.moving ? 1 : 0);
+  // Stay inside the allowed area: the whole city, or the club room
+  // when the bounds say so. The sea is a wall on foot — no swimming.
+  if (bounds) {
+    nx = Math.max(bounds.minX, Math.min(bounds.maxX, nx));
+    nz = Math.max(bounds.minZ, Math.min(bounds.maxZ, nz));
   } else {
-    p.y = gy;
+    nx = Math.max(-CITY.half - 6, Math.min(CITY.half + 6, nx));
+    nz = Math.max(-CITY.half - 6, Math.min(CITY.half + 6, nz));
+    // The sea is a wall on foot — except on the bridge road, the
+    // island and the pier, where eastMaxX opens the waterline for the
+    // prospective position, exactly as the cars use it.
+    nx = Math.min(eastMaxX(player.x, player.z, nx, nz), nx);
   }
-  if (p.invulnerable > 0) p.invulnerable -= dt;
-  // walk cycle
-  p.walkPhase += dt * p.speed * 1.6;
-  return p;
+  const fixed = collideCircle(player, nx, nz, colliders);
+  player.x = fixed.x;
+  player.z = fixed.z;
+  // Height follows the ground (street, bridge deck, island, pier),
+  // plus a jump arc that falls back onto it.
+  const ground = bounds ? 0 : groundHeightAt(player.x, player.z);
+  if (jump && player.y <= ground + 0.01) player.vy = PLAYER.jump;
+  player.vy -= 22 * dt;
+  player.y += player.vy * dt;
+  if (player.y <= ground) {
+    player.y = ground;
+    player.vy = 0;
+  }
+  if (player.invulnerable > 0) player.invulnerable -= dt;
+  if (player.moving) player.walkPhase += dt * speed * 1.6;
 }
 
-export function updatePlayerMesh(mesh, p) {
-  mesh.position.set(p.x, p.y, p.z);
-  mesh.rotation.y = -p.heading + Math.PI / 2;
-  const u = mesh.userData;
-  const swing = Math.sin(p.walkPhase) * (p.speed > 0.1 ? 0.5 : 0);
-  u.legL.rotation.x = swing;
-  u.legR.rotation.x = -swing;
-  u.armL.rotation.x = -swing * 0.8;
-  u.armR.rotation.x = swing * 0.8;
-  u.gun.visible = true;
-}
-
-// Hitscan pistol: nearest damageable thing in a cone in front of the player.
-// targets: [{x, z, y, radius, kind, ref}] — returns the hit target or null.
-export function shootAt(p, camYaw, targets, maxDist = 60) {
-  const fx = Math.cos(camYaw), fz = Math.sin(camYaw);
-  let best = null, bestD = maxDist;
+// A shot is a narrow cone in front of the player: the nearest target
+// inside the cone and inside 60 m is the one the bullet finds. Peds,
+// officers and vehicles all count, and the caller decides what the
+// hit means.
+export function shootAt(player, camYaw, targets) {
+  const fx = Math.cos(camYaw);
+  const fz = Math.sin(camYaw);
+  let best = null;
+  let bestD = Infinity;
   for (const t of targets) {
-    const dx = t.x - p.x, dz = t.z - p.z;
+    const dx = t.x - player.x;
+    const dz = t.z - player.z;
     const d = Math.hypot(dx, dz);
-    if (d > bestD || d < 0.5) continue;
-    const dot = (dx * fx + dz * fz) / d; // 1 = straight ahead
-    if (dot < 0.86) continue; // ~30 degree cone
-    // lateral distance from the shot line
-    const lat = Math.abs(-dx * fz + dz * fx);
-    if (lat > (t.radius ?? 1) + 0.6) continue;
-    best = t; bestD = d;
+    if (d > 60 || d < 0.5) continue;
+    const along = (dx * fx + dz * fz) / d;
+    if (along < 0.985) continue; // outside the ~10-degree cone
+    const spread = d * 0.14 + (t.radius || 0.8);
+    const side = Math.abs(-dx * fz + dz * fx);
+    if (side > spread) continue;
+    if (d < bestD) { bestD = d; best = t; }
   }
-  return best ? { target: best, dist: bestD } : null;
+  return best ? { target: best, distance: bestD } : null;
+}
+
+export function updatePlayerMesh(mesh, player) {
+  mesh.position.set(player.x, player.y, player.z);
+  mesh.rotation.y = -player.heading;
+  const legs = mesh.userData.legs;
+  if (!legs) return;
+  const swing = player.moving ? Math.sin(player.walkPhase) * 0.55 : 0;
+  legs.legL.rotation.x = swing;
+  legs.legR.rotation.x = -swing;
+  legs.armL.rotation.x = -swing * 0.7;
+  // A blink of invulnerability after a hit: the figure flickers
+  // rather than pretending nothing happened.
+  mesh.visible = !(player.invulnerable > 0 && Math.floor(performance.now() / 120) % 2 === 0);
 }

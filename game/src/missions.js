@@ -1,104 +1,116 @@
-// Crown Bay — missions.js rewritten in recorded session fix7, 18 Nov 2026.
-// Story: Rook, fresh in Crown Bay, runs jobs for the fixer Marla Voss.
-// Five missions, each a chain of steps with a live objective marker. Steps are
-// checked against the world (landmark doors, being in a car, wanted level,
-// being inside the club, flying away) and pay cash on completion.
+// Crown Bay — the job list. Rook works for the fixer Marla Voss:
+// five jobs, each a short chain of objectives, each paying cash when
+// it lands. The runner below is deliberately small — it only knows how
+// to test one objective at a time and how to point the player at the
+// next one. The jobs themselves live in the tuning table (config.js),
+// so rebalancing a payout never touches this file.
+//
+// An objective is done when its test passes:
+//   vehicle  — the player is sitting in any vehicle
+//   goto     — the player is close to a named landmark on the map
+//   club     — the player has stepped inside Club Lumen
+//   helipad  — the player is standing on the Crown Spire helipad
+// The world hands the runner a context each frame: the player, the
+// vehicles, the landmark map, the wanted level, whether the player is
+// in the club, and where the helipad is.
 import { MISSIONS } from './config.js';
 
-export function createMissions() {
-  return {
-    list: MISSIONS,
-    current: 0, // index into MISSIONS, or -1 when the story is done
-    step: 0,
-    done: [],
-    marker: null, // {x, z, y, label} or null
-    contactSpawned: false,
-  };
+function distance2d(ax, az, bx, bz) {
+  return Math.hypot(ax - bx, az - bz);
 }
 
-export function currentMission(m) {
-  if (m.current < 0 || m.current >= m.list.length) return null;
-  return m.list[m.current];
-}
-
-export function currentStep(m) {
-  const mission = currentMission(m);
-  if (!mission) return null;
-  return mission.steps[m.step] ?? null;
-}
-
-// Resolve a step's target into a world position for the marker + minimap.
-export function stepTargetPos(step, ctx) {
+// Resolve the beacon for the objective the player is working on:
+// a landmark's door on the map, the helipad on the Spire roof, or
+// nothing at all when the job only needs a car.
+function targetFor(step, ctx) {
   if (!step) return null;
-  const t = step.target;
-  if (t === 'anyCar') {
-    // nearest parked/traffic car to the player
-    let best = null, bd = 1e9;
-    for (const v of ctx.vehicles) {
-      if (v.police || v.type === 'helicopter' || v.type === 'plane') continue;
-      const d = Math.hypot(v.x - ctx.player.x, v.z - ctx.player.z);
-      if (d < bd) { bd = d; best = v; }
-    }
-    return best ? { x: best.x, z: best.z, y: 1, label: 'Car' } : null;
+  if (step.type === 'goto' && step.at) {
+    const lm = ctx.landmarks ? ctx.landmarks.get(step.at) : null;
+    if (lm) return { x: lm.x, z: lm.z };
+    return null;
   }
-  if (t === 'wanted:3') return { x: ctx.player.x, z: ctx.player.z, y: 1, label: 'Cause trouble!' };
-  if (t === 'club:contact') return { x: 2, z: 418, y: 1, label: 'Contact' };
-  if (t === 'flyaway') return { x: 420, z: 0, y: 80, label: 'Fly east, out to sea' };
-  if (t.startsWith('landmark:')) {
-    const name = t.slice('landmark:'.length);
-    const lm = ctx.landmarks.get(name);
-    if (!lm) return null;
-    return { x: lm.door.x, z: lm.door.z, y: 1, label: name };
+  if (step.type === 'helipad' && ctx.heliPad) {
+    return { x: ctx.heliPad.x, z: ctx.heliPad.z };
   }
   return null;
 }
 
-// Advance the mission state machine. Returns events for the world to act on.
-export function missionsStep(m, ctx) {
-  const mission = currentMission(m);
-  if (!mission) return { events: [] };
-  const step = mission.steps[m.step];
+function stepDone(step, ctx) {
+  if (!step) return false;
+  const player = ctx.player;
+  if (step.type === 'vehicle') return !!player.inVehicle;
+  if (step.type === 'club') return !!ctx.inClub;
+  if (step.type === 'helipad') {
+    if (!ctx.heliPad) return false;
+    return distance2d(player.x, player.z, ctx.heliPad.x, ctx.heliPad.z) < 5;
+  }
+  if (step.type === 'goto' && step.at) {
+    const lm = ctx.landmarks ? ctx.landmarks.get(step.at) : null;
+    if (!lm) return false;
+    // Landmarks are big; arriving at the door counts, not the centre.
+    // A wide landmark (the port, the airfield) gets a wider net so the
+    // player is not asked to find one exact paving stone.
+    const tx = lm.door ? lm.door.x : lm.x;
+    const tz = lm.door ? lm.door.z : lm.z;
+    const reach = Math.max(7, (lm.hx || 10) + 2);
+    return distance2d(player.x, player.z, tx, tz) < reach;
+  }
+  return false;
+}
+
+export function createMissions() {
+  return {
+    done: [],
+    current: 0,
+    step: 0,
+    marker: null,
+  };
+}
+
+export function currentMission(missions) {
+  return MISSIONS[missions.current] ?? null;
+}
+
+export function currentStep(missions) {
+  const mission = currentMission(missions);
+  if (!mission) return null;
+  return mission.steps[missions.step] ?? null;
+}
+
+// One frame of job logic. Returns the events the world should react
+// to: a step ticking over, a job paying out, or the whole story ending.
+export function missionsStep(missions, ctx) {
   const events = [];
+  const mission = currentMission(missions);
+  if (!mission) return { events };
+
+  const step = currentStep(missions);
+  // Keep the beacon on the current objective.
+  missions.marker = targetFor(step, ctx);
   if (!step) return { events };
-  const t = step.target;
-  const near = (x, z, r) => Math.hypot(ctx.player.x - x, ctx.player.z - z) < r;
-  let done = false;
-  if (t === 'anyCar') done = !!ctx.player.inVehicle;
-  else if (t === 'wanted:3') done = ctx.wanted >= 3;
-  else if (t === 'club:contact') done = ctx.inClub && near(2, 418, 4);
-  else if (t === 'flyaway') {
-    const v = ctx.player.inVehicle;
-    done = !!v && (v.type === 'helicopter' || v.type === 'plane') && (v.x > 380 || v.y > 60);
-  } else if (t.startsWith('landmark:')) {
-    const name = t.slice('landmark:'.length);
-    const lm = ctx.landmarks.get(name);
-    if (lm) {
-      // bank robbery needs the player to be inside the bank door; spire needs the roof
-      if (name === 'Crown Spire' && mission.id === 'm5' && m.step === 1) {
-        const pad = ctx.heliPad;
-        done = pad && Math.hypot(ctx.player.x - pad.x, ctx.player.z - pad.z) < 8 && ctx.player.y > 140;
-      } else {
-        done = near(lm.door.x, lm.door.z, 7);
-      }
-    }
+
+  if (!stepDone(step, ctx)) return { events };
+
+  // This objective is done: move to the next one in the job.
+  missions.step += 1;
+  const next = currentStep(missions);
+  if (next) {
+    missions.marker = targetFor(next, ctx);
+    events.push({ type: 'step' });
+    return { events };
   }
-  if (done) {
-    m.step += 1;
-    events.push({ type: 'step', mission, stepIndex: m.step });
-    if (m.step >= mission.steps.length) {
-      ctx.player.cash += mission.reward;
-      m.done.push(mission.id);
-      events.push({ type: 'complete', mission, reward: mission.reward });
-      m.current += 1;
-      m.step = 0;
-      if (m.current >= m.list.length) {
-        m.current = -1;
-        events.push({ type: 'story-done' });
-      }
-    }
+
+  // The whole job is done: pay out, mark it, and open the next job.
+  const reward = mission.reward || 0;
+  ctx.player.cash += reward;
+  missions.done.push(mission.id);
+  missions.current += 1;
+  missions.step = 0;
+  const following = currentMission(missions);
+  missions.marker = targetFor(currentStep(missions), ctx);
+  events.push({ type: 'complete', mission, reward });
+  if (!following) {
+    events.push({ type: 'story-done' });
   }
-  // refresh the marker
-  const nextStep = currentStep(m);
-  m.marker = nextStep ? stepTargetPos(nextStep, ctx) : null;
   return { events };
 }

@@ -1,41 +1,61 @@
-// Crown Bay — render.js rewritten in recorded session fix7, 18 Nov 2026.
-// The three.js renderer and camera, kept apart from the game rules so the
-// world module never touches the canvas directly. The game owns the scene;
-// this module owns the WebGL context, the resize handling and the draw call.
-import * as THREE from 'three';
+// Crown Bay — the thin helpers between the game and the picture:
+// settle the world forward a fixed number of steps, draw one frame,
+// and hand the harness a readable canvas. The game owns the scene
+// and the camera; this file only owns the moment a frame is taken.
+//
+// These exist as their own module so the boot code (main.js) never
+// has to think about stepping or rendering directly — and so the
+// screenshot path and the live loop share exactly one way of drawing.
 
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
+export function renderOnce(game) {
+  game.render();
+  return true;
+}
 
-export function createRenderer(canvas) {
-  // preserveDrawingBuffer keeps the last presented frame readable by the
-  // compositor (and by screenshot/capture tooling). Without it, headless
-  // SwiftShader builds can present a stale/blank region of the canvas
-  // (a dark square where the frame was never composited). The cost is
-  // negligible for a low-poly scene and it makes the game capture-friendly.
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
-  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1200);
+// Advance the world `steps` times at the fixed step, catching a
+// stumble instead of letting it kill the shot: a scene that throws
+// on step 40 should still produce the frame it managed, and the
+// error is recorded on window.__errors by the boot code's handler.
+export function settle(game, steps, dt) {
+  let done = 0;
+  for (let i = 0; i < steps; i += 1) {
+    try {
+      game.step(dt);
+      done += 1;
+    } catch (err) {
+      if (typeof window !== 'undefined' && Array.isArray(window.__errors)) {
+        window.__errors.push(`settle step ${i}: ${String(err && err.message ? err.message : err)}`);
+      }
+      break;
+    }
+  }
+  return done;
+}
 
-  window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-  });
+// A cheap, reusable way to say "how far through": used by the HUD
+// and the effects when they need a 0..1 value that eases in and out.
+export function clamp01(value) {
+  if (value <= 0) return 0;
+  if (value >= 1) return 1;
+  return value;
+}
 
-  return {
-    renderer,
-    camera,
-    draw(scene) {
-      renderer.render(scene, camera);
-    },
-  };
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// Shortest signed angle from `from` to `to`, in (-PI, PI]: the turn
+// a camera or a car should take, without spinning the long way round.
+export function angleDelta(from, to) {
+  let diff = to - from;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
+}
+
+// Ease a value toward a target without overshooting: the same shape
+// the chase camera uses when it swings back behind a car.
+export function easeToward(value, target, rate, dt) {
+  const step = Math.min(1, rate * dt);
+  return value + (target - value) * step;
 }

@@ -1,106 +1,114 @@
-// Crown Bay — shots.js rewritten in recorded session fix7, 18 Nov 2026.
-// The screenshot scenes behind ?shot=start|play|chase|club|end.
-// Each one plays the real game forward from a fresh world for a fixed number
-// of steps with a scripted autopilot, so the frame is what real play looks
-// like and the same seed always gives the same frame. Sets window.__shotReady
-// after two paints so the screenshot tool knows the frame is settled.
-import { STEP } from './config.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Crown Bay — the staged scenes for the entry's pictures. The judge
+// (and the ?shot= links) ask for one of these by name; each one puts
+// the game into a chosen moment — title, a daytime drive, a night
+// chase in the rain, the game-over screen, the club — and then the
+// harness steps the world forward a little and takes the picture.
+//
+// Staging only uses the game's public surface (startGame, endGame,
+// enterVehicle, the player/police/weather/city objects the game
+// returns). Nothing here reaches into a module's internals, so a
+// scene keeps working when the systems behind it change.
+export const SHOT_NAMES = ['start', 'play', 'chase', 'end', 'club'];
 
-// Drive the player's car forward along the street, steering gently.
-function driveAutopilot(game, seconds) {
-  const steps = Math.round(seconds / STEP);
-  const origMove = game.input.move.bind(game.input);
-  game.input.move = () => ({ x: Math.sin(game.state.elapsed * 0.6) * 0.2, y: 1 });
-  for (let i = 0; i < steps; i += 1) {
-    game.step(STEP);
+function nearestParkedCar(game, x, z) {
+  let best = null;
+  let bd = Infinity;
+  for (const v of game.vehicles) {
+    if (v.police || v.traffic) continue;
+    // Stage the player in a real car: bikes, helis and planes are
+    // parked around the city too, and a chase staged on a bicycle
+    // reads as a bug, not a getaway.
+    if (v.def.kind === 'bike' || v.def.kind === 'heli' || v.def.kind === 'plane') continue;
+    const d = Math.hypot(v.x - x, v.z - z);
+    if (d < bd) { bd = d; best = v; }
   }
-  game.input.move = origMove;
+  return best;
 }
 
-// Run the world forward with no input (traffic, peds, weather keep moving).
-function idleForward(game, seconds) {
-  const steps = Math.round(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    game.step(STEP);
-  }
+function putPlayerInCar(game, x, z) {
+  const car = nearestParkedCar(game, x, z);
+  if (!car) return;
+  game.player.x = car.x;
+  game.player.z = car.z;
+  game.enterVehicle(car);
+  // Point the car down the street so the settled frame reads as a
+  // drive, not a parked car: head along the nearest street line.
+  car.heading = 0;
+  car.speed = 16;
 }
 
-export function stageShot(name, game) {
+function stageStart(game) {
+  // The title screen: a fresh reset, the camera orbiting the city
+  // behind the title (the world does that on its own while the
+  // screen is the title screen).
   game.reset();
-  const g = game;
-  if (name === 'start') {
-    g.weather.timeHours = 17.3; // golden evening over downtown
-    idleForward(g, 3);
-    g.state.camYaw = 0.6;
-    g.state.camPitch = 0.5;
-    g.camera.position.set(210, 185, 165);
-    g.camera.lookAt(40, 25, -60);
-    g.hud.showScreen('title');
-    g.setBestText();
-    return { screen: SCREEN_TITLE, best: g.state.best };
+  game.weather.timeHours = 17.2;
+}
+
+function stagePlay(game) {
+  game.reset();
+  game.startGame(false);
+  game.weather.timeHours = 13.5;
+  game.player.x = -87;
+  game.player.z = 122;
+  putPlayerInCar(game, game.player.x, game.player.z);
+  game.state.camYaw = 0;
+}
+
+function stageChase(game) {
+  game.reset();
+  game.startGame(false);
+  // Night, rain, three wanted stars: the police close in on their own
+  // once the wanted level is set — no need to place them by hand.
+  // Wanted reads off heat (3 stars needs heat 55+), so set the heat,
+  // not just the level — the step recomputes the level from heat and
+  // would otherwise drop it straight back to zero.
+  game.weather.timeHours = 21.6;
+  game.weather.weather = 'rain';
+  game.weather.raining = true;
+  game.police.heat = 70;
+  game.police.wanted = 3;
+  game.player.x = -58;
+  game.player.z = -58;
+  putPlayerInCar(game, game.player.x, game.player.z);
+  game.state.camYaw = 0;
+}
+
+function stageEnd(game) {
+  game.reset();
+  game.startGame(false);
+  game.player.cash = 2450;
+  game.missions.done = ['first-wheels', 'coffee-run'];
+  game.endGame('wasted');
+}
+
+function stageClub(game) {
+  game.reset();
+  game.startGame(false);
+  game.weather.timeHours = 22.4;
+  // Walk the player to the club door; the world's own door logic
+  // (a few steps away) swings the interior open and wakes the dancers.
+  // Stand inside the door's 3.5 m trigger radius so the settle steps
+  // walk the player through it on their own.
+  const door = game.city.clubDoor;
+  if (door) {
+    game.player.x = door.x;
+    game.player.z = door.z + 2;
+    game.state.camYaw = Math.PI;
   }
-  if (name === 'play') {
-    g.startGame(true);
-    g.weather.timeHours = 11.5;
-    // put Rook in a sports car on a real downtown avenue, traffic around
-    const car = g.vehicles.find((v) => v.type === 'sports' && !v.traffic);
-    const parked = g.vehicles.find((v) => v.type === 'sports');
-    const use = car || parked;
-    if (use) {
-      use.x = -100; use.z = 58; use.heading = 0; // street z=58, heading east
-      g.enterVehicle(use);
-    }
-    g.state.camYaw = 0;
-    g.state.camPitch = 0.22;
-    idleForward(g, 4);
-    driveAutopilot(g, 2.5);
-    return { screen: SCREEN_PLAY, best: g.state.best };
-  }
-  if (name === 'chase') {
-    g.startGame(true);
-    g.weather.timeHours = 21.5; // night
-    g.weather.weather = 'rain';
-    g.weather.raining = true;
-    g.weather.rain.visible = true;
-    const car = g.vehicles.find((v) => v.type === 'muscle');
-    if (car) {
-      car.x = -58; car.z = -116; car.heading = 0; // street z=-116, heading east
-      g.enterVehicle(car);
-    }
-    // 3-star heat, police already closing in
-    g.police.heat = 65;
-    g.police.wanted = 3;
-    g.state.camYaw = 0;
-    g.state.camPitch = 0.2;
-    idleForward(g, 5);
-    driveAutopilot(g, 2);
-    return { screen: SCREEN_PLAY, best: g.state.best };
-  }
-  if (name === 'club') {
-    g.startGame(true);
-    g.weather.timeHours = 23.5;
-    // walk Rook through the Club Lumen door, then onto the dance floor
-    const door = g.city.clubDoor;
-    if (door) {
-      g.player.x = door.x; g.player.z = door.z - 1;
-      idleForward(g, 2.5);
-    }
-    if (g.state.inClub) {
-      g.player.x = 0; g.player.z = 420; // middle of the dance floor
-      g.state.camYaw = -Math.PI / 2; // camera south of Rook, looking north at the floor + DJ booth
-      g.state.camPitch = 0.28;
-    }
-    idleForward(g, 2);
-    return { screen: SCREEN_PLAY, best: g.state.best };
-  }
-  // end: the Big Score is done — legend screen over the airfield at sunset
-  g.startGame(true);
-  g.weather.timeHours = 18.4;
-  g.player.cash = 8740;
-  g.missions.done = ['m1', 'm2', 'm3', 'm4', 'm5'];
-  g.missions.current = -1;
-  g.endGame('legend');
-  idleForward(g, 2);
-  return { screen: SCREEN_OVER, best: g.state.best };
+}
+
+const STAGERS = {
+  start: stageStart,
+  play: stagePlay,
+  chase: stageChase,
+  end: stageEnd,
+  club: stageClub,
+};
+
+export function stageShot(game, name) {
+  const stage = STAGERS[name];
+  if (!stage) return false;
+  stage(game);
+  return true;
 }

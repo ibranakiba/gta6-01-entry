@@ -1,3 +1,4 @@
+// fix9
 // Crown Bay — the staged scenes for the entry's pictures. The judge
 // (and the ?shot= links) ask for one of these by name; each one puts
 // the game into a chosen moment — title, a daytime drive, a night

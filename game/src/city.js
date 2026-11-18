@@ -1,4 +1,4 @@
-// Crown Bay — city.js rewritten in recorded session fix7, 18 Nov 2026.
+// Crown Bay — city.js rewritten in recorded session fix9, 18 Nov 2026.
 // Crown Bay itself: the 10x10 block grid, its three districts, landmarks,
 // roads and sidewalks, traffic lights, street lamps, trees, the beach and sea,
 // the airfield, the port, and the Club Lumen interior (built off-map and shown

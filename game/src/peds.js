@@ -1,4 +1,4 @@
-// Crown Bay — peds.js rewritten in recorded session fix7, 18 Nov 2026.
+// Crown Bay — peds.js rewritten in recorded session fix9, 18 Nov 2026.
 // The people (and animals) of Crown Bay. Pedestrians are all different —
 // height, build, skin, clothes, hair, walk speed and behaviour: strollers,
 // chatters, crosswalk waiters, and runners who flee gunfire or a police chase.

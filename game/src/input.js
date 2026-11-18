@@ -1,4 +1,4 @@
-// Crown Bay — input.js rewritten in recorded session fix8, 18 Nov 2026.
+// Crown Bay — input.js rewritten in recorded session fix9, 18 Nov 2026.
 // Crown Bay — keyboard + mouse, in one place. Discrete presses (enter a
 // car, shoot, reload, pause, open the map, confirm the title screen) are
 // edge-triggered bits that takeActions() hands out once and clears, so a

@@ -1,3 +1,4 @@
+// fix9
 // Crown Bay — the thin helpers between the game and the picture:
 // settle the world forward a fixed number of steps, draw one frame,
 // and hand the harness a readable canvas. The game owns the scene

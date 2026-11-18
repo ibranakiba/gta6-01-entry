@@ -1,4 +1,4 @@
-// Crown Bay — world.js rewritten in recorded session fix7, 18 Nov 2026.
+// Crown Bay — world.js rewritten in recorded session fix9, 18 Nov 2026.
 // Crown Bay — the game itself. Owns the scene, the camera, the player, the
 // traffic, the police, the missions and the day: every system wired together.
 // Screens: title, play, paused, over (wasted / busted / legend).

@@ -1,4 +1,4 @@
-// Crown Bay — vehicles.js rewritten in recorded session fix7, 18 Nov 2026.
+// Crown Bay — vehicles.js rewritten in recorded session fix9, 18 Nov 2026.
 // Every vehicle in Crown Bay: 20 types, all stealable and drivable, built from
 // boxes and cylinders with headlights, brake lights and indicators. Arcade
 // physics (accelerate / brake / steer / collide), traffic that follows the road

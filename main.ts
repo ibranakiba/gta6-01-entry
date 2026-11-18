@@ -1,3 +1,4 @@
+// fix9
 // Crown Bay — the entrypoint. This program hands the game in: it
 // copies game/ out of the repository and into the output directory,
 // rebuilds screenshots/ there from the base64 files the repository

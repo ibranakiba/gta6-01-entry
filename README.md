@@ -105,3 +105,4 @@ The entry's pictures are staged from the game itself — add
 ## License
 
 MIT — see `LICENSE`.
+<!-- fix9 -->

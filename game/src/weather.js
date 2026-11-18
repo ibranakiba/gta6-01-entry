@@ -1,4 +1,4 @@
-// Crown Bay — weather.js rewritten in recorded session fix8, 18 Nov 2026.
+// Crown Bay — weather.js rewritten in recorded session fix9, 18 Nov 2026.
 // Crown Bay — the day cycle and the weather, in one place. The clock runs
 // a full 24 hours in about ten minutes of play: dawn, noon, a pink-orange
 // sunset and a dark-blue night, with the sun, the moon and the street

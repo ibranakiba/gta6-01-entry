@@ -1,4 +1,4 @@
-// Crown Bay — serve.ts rewritten in recorded session fix7, 18 Nov 2026.
+// Crown Bay — serve.ts rewritten in recorded session fix9, 18 Nov 2026.
 // A tiny static server for game/ (Node 22, standard library only), so Crown Bay
 // can be played locally without a build step: `node serve.ts` serves game/ on
 // http://localhost:8080. It sends the MIME types a browser game needs, refuses

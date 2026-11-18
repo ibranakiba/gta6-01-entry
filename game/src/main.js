@@ -1,3 +1,4 @@
+// fix9
 // Crown Bay — the front door. The page loads this module, it builds
 // the game on the page's canvas, and then it either runs the normal
 // play loop or stages one of the screenshot scenes (?shot=start,

@@ -1,4 +1,4 @@
-// Crown Bay — police.js rewritten in recorded session fix8, 18 Nov 2026.
+// Crown Bay — police.js rewritten in recorded session fix9, 18 Nov 2026.
 // Crown Bay — the CBPD: the wanted system and everyone who enforces it.
 // Heat is the real number (it rises with every crime and cools off when
 // the player stays out of sight); the wanted level is just heat read
